@@ -44,6 +44,46 @@ function getClaudeDir() {
   return path.join(os.homedir(), '.claude');
 }
 
+function getCodexDir() {
+  return path.join(os.homedir(), '.codex');
+}
+
+function toNum(n) {
+  const x = Number(n);
+  return Number.isFinite(x) ? x : 0;
+}
+
+function extractDate(ts) {
+  if (!ts || typeof ts !== 'string') return 'unknown';
+  return ts.includes('T') ? ts.split('T')[0] : ts;
+}
+
+function walkFilesRecursive(rootDir, includeFile) {
+  const out = [];
+  if (!fs.existsSync(rootDir)) return out;
+  const stack = [rootDir];
+
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.isFile()) {
+        if (!includeFile || includeFile(fullPath, entry.name)) out.push(fullPath);
+      }
+    }
+  }
+
+  return out;
+}
+
 async function parseJSONLFile(filePath) {
   const lines = [];
   const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
@@ -124,17 +164,17 @@ function extractSessionData(entries) {
   return queries;
 }
 
-async function parseAllSessions() {
+async function parseClaudeSessions() {
   const claudeDir = getClaudeDir();
   const projectsDir = path.join(claudeDir, 'projects');
   const warnings = [];
 
   if (!fs.existsSync(claudeDir)) {
-    return { sessions: [], dailyUsage: [], modelBreakdown: [], topPrompts: [], totals: {}, warnings: [{ type: 'missing-dir', message: 'Claude Code data directory not found at ' + claudeDir + '. Have you used Claude Code yet?' }] };
+    return { sessions: [], topPrompts: [], warnings: [{ type: 'missing-dir', provider: 'claude', message: 'Claude Code data directory not found at ' + claudeDir + '. Have you used Claude Code yet?' }] };
   }
 
   if (!fs.existsSync(projectsDir)) {
-    return { sessions: [], dailyUsage: [], modelBreakdown: [], topPrompts: [], totals: {}, warnings: [{ type: 'no-projects', message: 'No project data found. Start a Claude Code conversation to generate usage data.' }] };
+    return { sessions: [], topPrompts: [], warnings: [{ type: 'no-projects', provider: 'claude', message: 'No Claude project data found. Start a Claude Code conversation to generate usage data.' }] };
   }
 
   // Read history.jsonl for prompt display text
@@ -694,11 +734,640 @@ function generateInsights(sessions, allPrompts, totals) {
   return insights;
 }
 
+function generateCodexInsights(sessions, allPrompts, totals) {
+  const insights = [];
+  if (!sessions.length) return insights;
+
+  const shortHeavy = allPrompts.filter((p) => (p.prompt || '').trim().length < 30 && p.totalTokens > 120_000);
+  if (shortHeavy.length > 0) {
+    const total = shortHeavy.reduce((s, p) => s + p.totalTokens, 0);
+    const examples = [...new Set(shortHeavy.map((p) => (p.prompt || '').trim()))].filter(Boolean).slice(0, 4);
+    insights.push({
+      id: 'codex-vague-prompts',
+      type: 'warning',
+      title: 'Short prompts are driving heavy Codex usage',
+      description: `${shortHeavy.length} short prompts accounted for ${fmt(total)} tokens. Examples: ${examples.map((e) => `"${e}"`).join(', ')}.`,
+      action: 'Use explicit task instructions with target files and expected output to reduce back-and-forth and extra tool calls.',
+    });
+  }
+
+  const growth = sessions
+    .filter((s) => (s.queries || []).length >= 30)
+    .map((s) => {
+      const qs = s.queries || [];
+      const first = qs.slice(0, 5).reduce((sum, q) => sum + toNum(q.totalTokens), 0) / Math.min(5, qs.length);
+      const last = qs.slice(-5).reduce((sum, q) => sum + toNum(q.totalTokens), 0) / Math.min(5, qs.length);
+      return { session: s, ratio: last / Math.max(first, 1) };
+    })
+    .filter((x) => x.ratio > 1.8);
+  if (growth.length > 0) {
+    const avgGrowth = (growth.reduce((s, g) => s + g.ratio, 0) / growth.length).toFixed(1);
+    insights.push({
+      id: 'codex-context-growth',
+      type: 'warning',
+      title: 'Long Codex sessions become more expensive per turn',
+      description: `In ${growth.length} sessions, late turns used about ${avgGrowth}x more tokens than early turns.`,
+      action: 'Split work into focused sessions and start fresh after major task boundaries.',
+    });
+  }
+
+  const outputPct = totals.totalTokens > 0 ? (totals.totalOutputTokens / totals.totalTokens) * 100 : 0;
+  if (totals.totalTokens > 0 && outputPct < 5) {
+    insights.push({
+      id: 'codex-input-heavy',
+      type: 'info',
+      title: `${outputPct.toFixed(1)}% of tokens are final output`,
+      description: `Most usage is context/tool overhead rather than final assistant output in these Codex sessions.`,
+      action: 'Reduce context churn by narrowing prompts and file scope.',
+    });
+  }
+
+  const toolHeavy = sessions.filter((s) => {
+    const userMsgs = (s.queries || []).filter((q) => q.userPrompt).length;
+    const toolCalls = (s.queryCount || 0) - userMsgs;
+    return userMsgs > 0 && toolCalls > userMsgs * 3;
+  });
+  if (toolHeavy.length >= 2) {
+    const avgRatio = toolHeavy.reduce((sum, s) => {
+      const userMsgs = (s.queries || []).filter((q) => q.userPrompt).length;
+      return sum + ((s.queryCount || 0) - userMsgs) / Math.max(userMsgs, 1);
+    }, 0) / toolHeavy.length;
+    insights.push({
+      id: 'codex-tool-heavy',
+      type: 'info',
+      title: `High tool-call density in ${toolHeavy.length} sessions`,
+      description: `These sessions averaged about ${Math.round(avgRatio)} tool calls per user message.`,
+      action: 'Give direct file paths and expected edits to reduce search/exploration tool calls.',
+    });
+  }
+
+  const projectTokens = {};
+  for (const s of sessions) {
+    const key = s.project || 'unknown';
+    projectTokens[key] = (projectTokens[key] || 0) + toNum(s.totalTokens);
+  }
+  const sortedProjects = Object.entries(projectTokens).sort((a, b) => b[1] - a[1]);
+  if (sortedProjects.length >= 2) {
+    const topPct = (sortedProjects[0][1] / Math.max(totals.totalTokens, 1)) * 100;
+    if (topPct >= 60) {
+      insights.push({
+        id: 'codex-project-dominance',
+        type: 'neutral',
+        title: `${topPct.toFixed(0)}% of Codex tokens are in one project`,
+        description: `Top project used ${fmt(sortedProjects[0][1])} tokens vs ${fmt(sortedProjects[1][1])} for the next one.`,
+        action: null,
+      });
+    }
+  }
+
+  const qualifying = sessions.filter((s) => (s.queries || []).length >= 10);
+  if (qualifying.length >= 2) {
+    const inflections = [];
+    for (const s of qualifying) {
+      const qs = s.queries || [];
+      const baseline = qs.slice(0, 5).reduce((sum, q) => sum + toNum(q.totalTokens), 0) / Math.min(5, qs.length);
+      if (baseline <= 0) continue;
+      let inflectionTurn = null;
+      for (let i = 2; i < qs.length; i++) {
+        const rolling = (toNum(qs[i].totalTokens) + toNum(qs[i - 1].totalTokens) + toNum(qs[i - 2].totalTokens)) / 3;
+        if (rolling > baseline * 2) {
+          inflectionTurn = i - 1;
+          break;
+        }
+      }
+      if (inflectionTurn != null) inflections.push(inflectionTurn);
+    }
+    if (inflections.length >= 2) {
+      inflections.sort((a, b) => a - b);
+      const medianTurn = inflections[Math.floor(inflections.length / 2)];
+      insights.push({
+        id: 'codex-smart-clear',
+        type: 'warning',
+        title: `Consider resetting session context after ~${medianTurn} turns`,
+        description: `Token growth inflection often appears around turn ${medianTurn} in your Codex history.`,
+        action: 'Start a new session after a clear milestone and carry over only a short summary.',
+      });
+    }
+  }
+
+  return insights;
+}
+
 function fmt(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 10_000) return (n / 1_000).toFixed(0) + 'K';
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
   return n.toLocaleString();
+}
+
+function getPrimaryModel(queries, fallback = 'unknown') {
+  const modelCounts = {};
+  for (const q of queries || []) {
+    if (!q || !q.model) continue;
+    modelCounts[q.model] = (modelCounts[q.model] || 0) + 1;
+  }
+  const top = Object.entries(modelCounts).sort((a, b) => b[1] - a[1])[0];
+  return top ? top[0] : fallback;
+}
+
+function addSessionPrompts(allPrompts, session) {
+  let currentPrompt = null;
+  let promptInput = 0;
+  let promptOutput = 0;
+  let promptCacheCreation = 0;
+  let promptCacheRead = 0;
+  let promptCost = 0;
+
+  const flushPrompt = () => {
+    const total = promptInput + promptOutput + promptCacheCreation + promptCacheRead;
+    if (!currentPrompt || total <= 0) return;
+    allPrompts.push({
+      provider: session.provider,
+      prompt: currentPrompt.substring(0, 300),
+      inputTokens: promptInput,
+      outputTokens: promptOutput,
+      cacheCreationTokens: promptCacheCreation,
+      cacheReadTokens: promptCacheRead,
+      totalTokens: total,
+      cost: promptCost,
+      date: session.date,
+      sessionId: session.sessionId,
+      model: session.model,
+    });
+  };
+
+  for (const q of session.queries || []) {
+    if (q.userPrompt && q.userPrompt !== currentPrompt) {
+      flushPrompt();
+      currentPrompt = q.userPrompt;
+      promptInput = 0;
+      promptOutput = 0;
+      promptCacheCreation = 0;
+      promptCacheRead = 0;
+      promptCost = 0;
+    }
+    promptInput += toNum(q.inputTokens);
+    promptOutput += toNum(q.outputTokens);
+    promptCacheCreation += toNum(q.cacheCreationTokens);
+    promptCacheRead += toNum(q.cacheReadTokens);
+    promptCost += toNum(q.cost);
+  }
+  flushPrompt();
+}
+
+function extractCodexPrompt(entry) {
+  const payload = entry?.payload;
+  if (!payload) return null;
+
+  if (payload.type === 'user_message' && typeof payload.message === 'string') {
+    return payload.message.trim();
+  }
+
+  if (payload.type === 'message' && payload.role === 'user' && Array.isArray(payload.content)) {
+    const txt = payload.content
+      .map((c) => (typeof c?.text === 'string' ? c.text : ''))
+      .join('\n')
+      .trim();
+    return txt || null;
+  }
+
+  return null;
+}
+
+function extractCodexTool(entry) {
+  const payload = entry?.payload;
+  if (!payload) return null;
+  if (payload.type === 'function_call' && payload.name) return payload.name;
+  if (payload.type === 'custom_tool_call' && payload.name) return payload.name;
+  if (payload.type === 'web_search_call') return 'web_search';
+  return null;
+}
+
+function extractCodexTokenUsage(entry) {
+  if (entry?.type !== 'event_msg') return null;
+  const payload = entry.payload;
+  if (payload?.type !== 'token_count') return null;
+
+  const last = payload.info?.last_token_usage;
+  if (!last || typeof last !== 'object') return null;
+
+  const inputTokens = toNum(last.input_tokens);
+  const cacheReadTokens = toNum(last.cached_input_tokens);
+  const outputTokens = toNum(last.output_tokens) + toNum(last.reasoning_output_tokens);
+  const totalTokens = toNum(last.total_tokens) || (inputTokens + cacheReadTokens + outputTokens);
+
+  return {
+    inputTokens,
+    cacheReadTokens,
+    outputTokens,
+    totalTokens,
+    key: `${inputTokens}|${cacheReadTokens}|${outputTokens}|${totalTokens}`,
+  };
+}
+
+async function parseCodexSessions() {
+  const codexDir = getCodexDir();
+  const sessionsRoot = path.join(codexDir, 'sessions');
+  const warnings = [];
+  const sessions = [];
+
+  if (!fs.existsSync(codexDir) || !fs.existsSync(sessionsRoot)) {
+    warnings.push({ type: 'missing-codex-dir', provider: 'codex', message: `Codex session directory not found at ${sessionsRoot}.` });
+    return { sessions, warnings };
+  }
+
+  const files = walkFilesRecursive(sessionsRoot, (_, name) => name.endsWith('.jsonl'));
+  if (!files.length) {
+    warnings.push({ type: 'missing-codex-sessions', provider: 'codex', message: 'No Codex session files found.' });
+    return { sessions, warnings };
+  }
+
+  for (const filePath of files) {
+    let entries;
+    try {
+      entries = await parseJSONLFile(filePath);
+    } catch {
+      continue;
+    }
+    if (!entries.length) continue;
+
+    const meta = entries.find((e) => e?.type === 'session_meta')?.payload || {};
+    const sessionId = meta.id || path.basename(filePath, '.jsonl');
+    const project = meta.cwd || 'codex-workspace';
+    let model = 'gpt-5-codex';
+
+    const userPrompts = [];
+    const queries = [];
+    let promptIndex = 0;
+    let lastTokenKey = null;
+    let pendingTools = [];
+
+    for (const entry of entries) {
+      if (entry?.type === 'turn_context' && entry?.payload?.model) {
+        model = entry.payload.model;
+      }
+
+      const prompt = extractCodexPrompt(entry);
+      if (prompt) {
+        userPrompts.push({
+          text: prompt,
+          timestamp: entry.timestamp || null,
+        });
+      }
+
+      const tool = extractCodexTool(entry);
+      if (tool) pendingTools.push(tool);
+
+      const usage = extractCodexTokenUsage(entry);
+      if (!usage || usage.key === lastTokenKey) continue;
+      lastTokenKey = usage.key;
+
+      const userPrompt = userPrompts[promptIndex]?.text || null;
+      const userTimestamp = userPrompts[promptIndex]?.timestamp || null;
+      if (userPrompts[promptIndex]) promptIndex += 1;
+
+      queries.push({
+        userPrompt,
+        userTimestamp,
+        assistantTimestamp: entry.timestamp || null,
+        model,
+        inputTokens: usage.inputTokens,
+        cacheCreationTokens: 0,
+        cacheReadTokens: usage.cacheReadTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        cost: 0,
+        tools: [...new Set(pendingTools)],
+      });
+      pendingTools = [];
+    }
+
+    if (!queries.length && userPrompts.length) {
+      for (const p of userPrompts) {
+        queries.push({
+          userPrompt: p.text,
+          userTimestamp: p.timestamp,
+          assistantTimestamp: p.timestamp,
+          model,
+          inputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+          tools: [],
+        });
+      }
+    }
+    if (!queries.length) continue;
+
+    const inputTokens = queries.reduce((s, q) => s + q.inputTokens, 0);
+    const outputTokens = queries.reduce((s, q) => s + q.outputTokens, 0);
+    const cacheReadTokens = queries.reduce((s, q) => s + q.cacheReadTokens, 0);
+    const totalTokens = queries.reduce((s, q) => s + q.totalTokens, 0);
+    const firstTimestamp = meta.timestamp || entries.find((e) => e.timestamp)?.timestamp || null;
+    const firstPrompt = userPrompts[0]?.text || queries.find((q) => q.userPrompt)?.userPrompt || '(no prompt)';
+
+    sessions.push({
+      provider: 'codex',
+      sessionId,
+      project,
+      date: extractDate(firstTimestamp),
+      timestamp: firstTimestamp,
+      firstPrompt: String(firstPrompt).substring(0, 200),
+      model: getPrimaryModel(queries, model),
+      queryCount: queries.length,
+      queries,
+      inputTokens,
+      outputTokens,
+      cacheCreationTokens: 0,
+      cacheReadTokens,
+      totalTokens,
+      cost: 0,
+    });
+  }
+
+  return { sessions, warnings };
+}
+
+function buildAggregateFromSessions(sessions, warnings) {
+  const sortedSessions = [...sessions].sort((a, b) => {
+    const tokenDiff = toNum(b.totalTokens) - toNum(a.totalTokens);
+    if (tokenDiff !== 0) return tokenDiff;
+    return String(b.timestamp || '').localeCompare(String(a.timestamp || ''));
+  });
+
+  const dailyMap = {};
+  const modelMap = {};
+  const projectMap = {};
+  const providerMap = {};
+  const allPrompts = [];
+
+  for (const session of sortedSessions) {
+    const provider = session.provider || 'unknown';
+
+    if (!providerMap[provider]) {
+      providerMap[provider] = {
+        provider,
+        sessionCount: 0,
+        queryCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        totalTokens: 0,
+        totalCost: 0,
+      };
+    }
+    providerMap[provider].sessionCount += 1;
+    providerMap[provider].queryCount += toNum(session.queryCount);
+    providerMap[provider].inputTokens += toNum(session.inputTokens);
+    providerMap[provider].outputTokens += toNum(session.outputTokens);
+    providerMap[provider].cacheCreationTokens += toNum(session.cacheCreationTokens);
+    providerMap[provider].cacheReadTokens += toNum(session.cacheReadTokens);
+    providerMap[provider].totalTokens += toNum(session.totalTokens);
+    providerMap[provider].totalCost += toNum(session.cost);
+
+    const date = session.date || 'unknown';
+    if (date !== 'unknown') {
+      if (!dailyMap[date]) {
+        dailyMap[date] = {
+          date,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+          sessions: 0,
+          queries: 0,
+        };
+      }
+      dailyMap[date].inputTokens += toNum(session.inputTokens);
+      dailyMap[date].outputTokens += toNum(session.outputTokens);
+      dailyMap[date].cacheCreationTokens += toNum(session.cacheCreationTokens);
+      dailyMap[date].cacheReadTokens += toNum(session.cacheReadTokens);
+      dailyMap[date].totalTokens += toNum(session.totalTokens);
+      dailyMap[date].cost += toNum(session.cost);
+      dailyMap[date].sessions += 1;
+      dailyMap[date].queries += toNum(session.queryCount);
+    }
+
+    const projectKey = `${provider}::${session.project || 'unknown'}`;
+    if (!projectMap[projectKey]) {
+      projectMap[projectKey] = {
+        provider,
+        project: session.project || 'unknown',
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        sessionCount: 0,
+        queryCount: 0,
+        modelMap: {},
+        allPrompts: [],
+      };
+    }
+    const project = projectMap[projectKey];
+    project.inputTokens += toNum(session.inputTokens);
+    project.outputTokens += toNum(session.outputTokens);
+    project.totalTokens += toNum(session.totalTokens);
+    project.sessionCount += 1;
+    project.queryCount += toNum(session.queryCount);
+
+    // Model breakdown
+    for (const q of session.queries || []) {
+      const model = q.model || session.model || 'unknown';
+      if (model === '<synthetic>' || model === 'unknown') continue;
+
+      if (!modelMap[model]) {
+        modelMap[model] = {
+          model,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+          queryCount: 0,
+        };
+      }
+      modelMap[model].inputTokens += toNum(q.inputTokens);
+      modelMap[model].outputTokens += toNum(q.outputTokens);
+      modelMap[model].cacheCreationTokens += toNum(q.cacheCreationTokens);
+      modelMap[model].cacheReadTokens += toNum(q.cacheReadTokens);
+      modelMap[model].totalTokens += toNum(q.totalTokens);
+      modelMap[model].cost += toNum(q.cost);
+      modelMap[model].queryCount += 1;
+
+      if (!project.modelMap[model]) {
+        project.modelMap[model] = { model, inputTokens: 0, outputTokens: 0, totalTokens: 0, queryCount: 0 };
+      }
+      project.modelMap[model].inputTokens += toNum(q.inputTokens);
+      project.modelMap[model].outputTokens += toNum(q.outputTokens);
+      project.modelMap[model].totalTokens += toNum(q.totalTokens);
+      project.modelMap[model].queryCount += 1;
+    }
+
+    // Per-project prompt grouping with tool tracking
+    let curPrompt = null;
+    let curInput = 0;
+    let curOutput = 0;
+    let curConts = 0;
+    let curModels = {};
+    let curTools = {};
+
+    const flushProjectPrompt = () => {
+      if (!curPrompt || (curInput + curOutput) <= 0) return;
+      const topModel = Object.entries(curModels).sort((a, b) => b[1] - a[1])[0]?.[0] || session.model;
+      project.allPrompts.push({
+        provider: session.provider,
+        prompt: curPrompt.substring(0, 300),
+        inputTokens: curInput,
+        outputTokens: curOutput,
+        totalTokens: curInput + curOutput,
+        continuations: curConts,
+        model: topModel,
+        toolCounts: { ...curTools },
+        date: session.date,
+        sessionId: session.sessionId,
+      });
+    };
+
+    for (const q of session.queries || []) {
+      if (q.userPrompt && q.userPrompt !== curPrompt) {
+        flushProjectPrompt();
+        curPrompt = q.userPrompt;
+        curInput = 0;
+        curOutput = 0;
+        curConts = 0;
+        curModels = {};
+        curTools = {};
+      } else if (!q.userPrompt) {
+        curConts += 1;
+      }
+      curInput += toNum(q.inputTokens);
+      curOutput += toNum(q.outputTokens);
+      if (q.model && q.model !== '<synthetic>') curModels[q.model] = (curModels[q.model] || 0) + 1;
+      for (const t of q.tools || []) curTools[t] = (curTools[t] || 0) + 1;
+    }
+    flushProjectPrompt();
+
+    addSessionPrompts(allPrompts, session);
+  }
+
+  const dailyUsage = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+  const modelBreakdown = Object.values(modelMap).sort((a, b) => b.totalTokens - a.totalTokens);
+  const projectBreakdown = Object.values(projectMap).map((p) => ({
+    provider: p.provider,
+    project: p.project,
+    inputTokens: p.inputTokens,
+    outputTokens: p.outputTokens,
+    totalTokens: p.totalTokens,
+    sessionCount: p.sessionCount,
+    queryCount: p.queryCount,
+    modelBreakdown: Object.values(p.modelMap).sort((a, b) => b.totalTokens - a.totalTokens),
+    topPrompts: (p.allPrompts || []).sort((a, b) => b.totalTokens - a.totalTokens).slice(0, 10),
+  })).sort((a, b) => b.totalTokens - a.totalTokens);
+
+  const topPrompts = allPrompts
+    .filter((p) => p.totalTokens > 0)
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .slice(0, 20);
+
+  const totalCacheCreationTokens = sortedSessions.reduce((sum, s) => sum + toNum(s.cacheCreationTokens), 0);
+  const totalCacheReadTokens = sortedSessions.reduce((sum, s) => sum + toNum(s.cacheReadTokens), 0);
+  const totalCost = sortedSessions.reduce((sum, s) => sum + toNum(s.cost), 0);
+  const totalAllInput = sortedSessions.reduce((sum, s) => (
+    sum + toNum(s.inputTokens) + toNum(s.cacheCreationTokens) + toNum(s.cacheReadTokens)
+  ), 0);
+  const totalSaved = totalCacheReadTokens * (DEFAULT_PRICING.input - DEFAULT_PRICING.cacheRead);
+  const cacheHitRate = totalAllInput > 0 ? totalCacheReadTokens / totalAllInput : 0;
+
+  const totals = {
+    totalSessions: sortedSessions.length,
+    totalQueries: sortedSessions.reduce((sum, s) => sum + toNum(s.queryCount), 0),
+    totalTokens: sortedSessions.reduce((sum, s) => sum + toNum(s.totalTokens), 0),
+    totalInputTokens: sortedSessions.reduce((sum, s) => sum + toNum(s.inputTokens), 0),
+    totalOutputTokens: sortedSessions.reduce((sum, s) => sum + toNum(s.outputTokens), 0),
+    totalCacheCreationTokens,
+    totalCacheReadTokens,
+    totalCost,
+    totalSaved,
+    cacheHitRate,
+    avgTokensPerQuery: 0,
+    avgTokensPerSession: 0,
+    dateRange: dailyUsage.length
+      ? { from: dailyUsage[0].date, to: dailyUsage[dailyUsage.length - 1].date }
+      : null,
+  };
+  if (totals.totalQueries > 0) totals.avgTokensPerQuery = Math.round(totals.totalTokens / totals.totalQueries);
+  if (totals.totalSessions > 0) totals.avgTokensPerSession = Math.round(totals.totalTokens / totals.totalSessions);
+
+  const providerBreakdown = Object.values(providerMap)
+    .map((p) => ({ ...p, hasTokenData: p.totalTokens > 0 }))
+    .sort((a, b) => b.totalTokens - a.totalTokens || b.queryCount - a.queryCount);
+
+  return {
+    sessions: sortedSessions,
+    dailyUsage,
+    modelBreakdown,
+    projectBreakdown,
+    topPrompts,
+    totals,
+    providerBreakdown,
+    warnings,
+  };
+}
+
+async function parseAllSessions() {
+  const [claudeData, codexData] = await Promise.all([
+    parseClaudeSessions(),
+    parseCodexSessions(),
+  ]);
+
+  const claudeSessions = (claudeData.sessions || []).map((s) => ({ ...s, provider: 'claude' }));
+  const codexSessions = (codexData.sessions || []).map((s) => ({ ...s, provider: 'codex' }));
+  const claudeTopPrompts = (claudeData.topPrompts || []).map((p) => ({ ...p, provider: 'claude' }));
+
+  const allSessions = [
+    ...claudeSessions,
+    ...codexSessions,
+  ];
+  const allWarnings = [
+    ...(claudeData.warnings || []),
+    ...(codexData.warnings || []),
+  ];
+
+  const aggregate = buildAggregateFromSessions(allSessions, allWarnings);
+
+  const claudeTotals = buildAggregateFromSessions(claudeSessions, []).totals;
+  const codexAggregate = buildAggregateFromSessions(codexSessions, []);
+  const codexTotals = codexAggregate.totals;
+  const codexTopPrompts = codexAggregate.topPrompts || [];
+
+  const claudeInsights = claudeSessions.length
+    ? generateInsights(claudeSessions, claudeTopPrompts, claudeTotals)
+    : [];
+  const codexInsights = codexSessions.length
+    ? generateCodexInsights(codexSessions, codexTopPrompts, codexTotals)
+    : [];
+  const insightsByProvider = {
+    claude: claudeInsights,
+    codex: codexInsights,
+  };
+
+  return {
+    sessions: aggregate.sessions,
+    dailyUsage: aggregate.dailyUsage,
+    modelBreakdown: aggregate.modelBreakdown,
+    projectBreakdown: aggregate.projectBreakdown,
+    topPrompts: aggregate.topPrompts,
+    totals: aggregate.totals,
+    providerBreakdown: aggregate.providerBreakdown,
+    insights: claudeInsights,
+    insightsByProvider,
+    warnings: aggregate.warnings,
+  };
 }
 
 module.exports = { parseAllSessions };

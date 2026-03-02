@@ -1,51 +1,68 @@
-# claude-spend
+# Agent Spend
 
-See where your Claude Code tokens go. One command, zero setup.
+Agent Spend is a local usage analytics dashboard for coding agents.
+It currently supports:
+- Claude (`~/.claude/projects`)
+- Codex (`~/.codex/sessions`)
 
-## Problem
+## Upstream Attribution
 
- I've been using Claude Code every day for 3 months. I hit the usage limit almost daily, but had zero visibility into which prompts were eating my tokens. So I built claude-spend. One command, zero setup. 
+This project is based on the original [`claude-spend`](https://github.com/writetoaniketparihar-collab/claude-spend) by Aniket Parihar.
 
-## How does it look
+This standalone repo adds:
+- Multi-provider parsing architecture
+- Codex ingestion and token aggregation
+- Provider-aware dashboard filtering
+- Provider-specific insights (`Claude`, `Codex`)
+- Rebrand to Agent Spend
 
+For full lineage and diffs, see [UPSTREAM.md](./UPSTREAM.md).
 
-<img width="1910" height="966" alt="Screenshot 2026-02-18 092727" src="https://github.com/user-attachments/assets/11cc7149-d4dd-4e44-a3a0-0b48e935b7bc" />
+## What's Changed From Upstream
 
-<img width="1906" height="966" alt="Screenshot 2026-02-18 093529" src="https://github.com/user-attachments/assets/537c3611-5794-41d2-864e-e368e6949812" />
-
-<img width="1908" height="969" alt="Screenshot 2026-02-18 093647" src="https://github.com/user-attachments/assets/aaaa8ce5-2025-407d-8596-ea1965748691" />
-
-<img width="1908" height="969" alt="Screenshot 2026-02-18 093647" src="https://github.com/user-attachments/assets/a9fde5e2-6e52-4bae-9b96-03655109aef6" />
-
-
+1. Added Codex support in backend parser.
+2. Removed Gemini ingestion (insufficient useful local token data).
+3. Added provider breakdown API and provider-aware UI controls.
+4. Added Codex insight generation (token-based rules).
+5. Rebranded naming and docs to Agent Spend.
 
 ## Install
 
+```bash
+npm install
 ```
-npx claude-spend
+
+## Run
+
+```bash
+node src/index.js
 ```
 
-That's it. Opens a dashboard in your browser.
+Options:
 
-
-## What it does
-
-- Reads your local Claude Code session files (nothing leaves your machine)
-- Shows token usage per conversation, per day, and per model
-- Surfaces insights like which prompts cost the most and usage patterns
-
-
-## Options
-
+```bash
+node src/index.js --port 8080
+node src/index.js --no-open
 ```
-claude-spend --port 8080   # custom port (default: 3456)
-claude-spend --no-open     # don't auto-open browser
-```
+
+## Verify Locally
+
+After launch:
+- Dashboard: `http://localhost:3456`
+- Data API: `http://localhost:3456/api/data`
+
+Expected API shape includes:
+- `sessions`
+- `providerBreakdown`
+- `insightsByProvider`
 
 ## Privacy
 
-All data stays local. claude-spend reads files from `~/.claude/` on your machine and serves a dashboard on localhost. No data is sent anywhere.
+Agent Spend reads local log files and serves a localhost dashboard.
+No telemetry or remote data upload is included.
 
 ## License
 
-MIT
+MIT. See [LICENSE](./LICENSE).
+
+Created by Anshumani Ruddra.

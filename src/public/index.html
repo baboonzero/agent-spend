@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Spend</title>
+<title>Agent Spend</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
@@ -127,6 +127,72 @@
     box-shadow: 0 2px 8px rgba(99,102,241,0.12);
   }
   .refresh-btn svg { width: 14px; height: 14px; }
+
+  /* Provider controls */
+  .provider-toolbar {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-sm);
+  }
+  .provider-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .provider-tab {
+    border: 1px solid var(--border);
+    background: #FAFBFF;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .provider-tab:hover { border-color: var(--indigo); color: var(--indigo); }
+  .provider-tab.active {
+    background: rgba(99,102,241,0.1);
+    border-color: rgba(99,102,241,0.25);
+    color: #4338CA;
+  }
+  .provider-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+  @media (max-width: 900px) {
+    .provider-cards { grid-template-columns: 1fr; }
+  }
+  .provider-card {
+    border: 1px solid var(--border);
+    background: #FCFCFE;
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+  .provider-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+  .provider-name { font-size: 13px; font-weight: 700; color: var(--text); }
+  .provider-badge {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border-radius: 999px;
+    padding: 2px 8px;
+    background: rgba(99,102,241,0.08);
+    color: #4338CA;
+  }
+  .provider-meta { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+  .provider-meta-muted { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 
   /* ---- STAT CARDS ---- */
   .stats-row {
@@ -678,7 +744,7 @@
 
 <div id="loading" class="loading">
   <div class="spinner"></div>
-  <div class="loading-text">Reading your Claude Code sessions...</div>
+  <div class="loading-text">Reading your local AI assistant sessions...</div>
 </div>
 
 <div id="app" class="container" style="display:none">
@@ -697,7 +763,7 @@
       <div class="logo-mark">
         <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
       </div>
-      <h1>Claude Spend</h1>
+      <h1>Agent Spend</h1>
     </div>
     <div class="header-right">
       <span id="dateRange" class="date-range"></span>
@@ -714,18 +780,23 @@
 
   <!-- Value proposition -->
   <div class="hero-section animate delay-1">
-    <h2 class="hero-title">Your Claude Code usage, visualized.</h2>
-    <p class="hero-subtitle">See where your tokens actually go.</p>
+    <h2 class="hero-title">Your agent usage, visualized.</h2>
+    <p class="hero-subtitle">Compare Claude and Codex usage from local logs.</p>
+  </div>
+
+  <div class="provider-toolbar animate delay-1">
+    <div id="providerTabs" class="provider-tabs"></div>
+    <div id="providerCards" class="provider-cards"></div>
   </div>
 
   <!-- How Tokens Work -->
   <div class="how-tokens animate delay-1">
     <div class="how-tokens-toggle" onclick="this.parentElement.classList.toggle('expanded')">
-      <h3>How Claude Code tokens work</h3>
+      <h3>How token accounting works</h3>
       <div class="how-tokens-arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 4.5L6 7.5L9 4.5"/></svg></div>
     </div>
     <div class="how-tokens-body">
-      <p>Every time you send a message, Claude doesn't just read your latest message. It re-reads your <strong>entire conversation</strong> from the beginning. That's why tokens add up fast.</p>
+      <p>For providers that expose token logs (especially Claude and Codex), each new turn includes prior context. That is why token usage grows in long sessions.</p>
 
       <div class="how-tokens-example">
         <div class="how-tokens-example-title">Example: A 3-message conversation</div>
@@ -767,7 +838,7 @@
       </div>
 
       <div class="how-tokens-tip">
-        <strong>Tip:</strong> Use <code>/clear</code> when switching tasks. It resets the conversation so Claude stops re-reading old context you no longer need.
+        <strong>Tip:</strong> Start a fresh session when switching tasks. It resets context so old history is not repeatedly included.
       </div>
     </div>
   </div>
@@ -858,6 +929,7 @@
             <th data-sort="date">Date</th>
             <th data-sort="prompt">What you asked</th>
             <th data-sort="model" class="has-tooltip has-tooltip-below">Model<div class="tooltip">Which AI model was used. Opus is the most capable (and uses more tokens), Sonnet is faster and lighter.</div></th>
+            <th data-sort="provider">Provider</th>
             <th data-sort="queries" style="text-align:right" class="has-tooltip has-tooltip-below">Messages<div class="tooltip">How many back-and-forth messages happened in this conversation, including automatic tool calls Claude made.</div></th>
             <th data-sort="total" style="text-align:right" class="sorted has-tooltip has-tooltip-below">Total tokens<div class="tooltip">The total number of tokens used in this conversation. Higher means more expensive. Long conversations cost more because Claude re-reads everything each turn.</div></th>
             <th data-sort="input" style="text-align:right" class="has-tooltip has-tooltip-below">Read<div class="tooltip">Tokens Claude read: your messages, the conversation history, files, and system context. This grows with each message because the full history gets re-sent.</div></th>
@@ -870,8 +942,8 @@
   </div>
 
   <div class="footer">
-    <div style="margin-bottom: 8px; color: var(--text-secondary); font-size: 13px;">This tool runs 100% locally -- no analytics, no tracking. If you find it useful (or not), I'd love to hear from you at <a href="mailto:writetoaniketparihar@gmail.com">writetoaniketparihar@gmail.com</a></div>
-    Made with <a href="https://claude.ai/code" target="_blank">Claude Code</a> and &#10084; by <a href="https://www.linkedin.com/in/writetoaniketparihar/" target="_blank">Aniket</a>
+    <div style="margin-bottom: 8px; color: var(--text-secondary); font-size: 13px;">This tool runs 100% locally -- no analytics, no tracking. Original project by <a href="https://www.linkedin.com/in/writetoaniketparihar/" target="_blank">Aniket</a>, extended in this fork for multi-provider usage by <a href="https://labs.anshumani.com" target="_blank">Anshumani</a>.</div>
+    Thanks to the original creator of <a href="https://github.com/writetoaniketparihar-collab/claude-spend" target="_blank">claude-spend</a> for the base project.
   </div>
 </div>
 
@@ -891,6 +963,8 @@
 let DATA = null;
 let currentSort = { key: 'total', dir: 'desc' };
 let searchQuery = '';
+let currentProvider = 'all';
+let VIEW = null;
 
 function fmt(n) {
   if (n == null || isNaN(n)) return '0';
@@ -904,6 +978,165 @@ function fmtFull(n) {
   return n.toLocaleString();
 }
 
+function providerLabel(p) {
+  if (p === 'claude') return 'Claude';
+  if (p === 'codex') return 'Codex';
+  return p ? (p.charAt(0).toUpperCase() + p.slice(1)) : 'Unknown';
+}
+
+function computeTotalsFromSessions(sessions, dailyUsage) {
+  const totals = {
+    totalSessions: sessions.length,
+    totalQueries: sessions.reduce((s, x) => s + (x.queryCount || 0), 0),
+    totalTokens: sessions.reduce((s, x) => s + (x.totalTokens || 0), 0),
+    totalInputTokens: sessions.reduce((s, x) => s + (x.inputTokens || 0), 0),
+    totalOutputTokens: sessions.reduce((s, x) => s + (x.outputTokens || 0), 0),
+    totalCacheCreationTokens: sessions.reduce((s, x) => s + (x.cacheCreationTokens || 0), 0),
+    totalCacheReadTokens: sessions.reduce((s, x) => s + (x.cacheReadTokens || 0), 0),
+    totalCost: sessions.reduce((s, x) => s + (x.cost || 0), 0),
+    totalSaved: 0,
+    cacheHitRate: 0,
+    avgTokensPerQuery: 0,
+    avgTokensPerSession: 0,
+    dateRange: dailyUsage.length ? { from: dailyUsage[0].date, to: dailyUsage[dailyUsage.length - 1].date } : null,
+  };
+  const totalAllInput = totals.totalInputTokens + totals.totalCacheCreationTokens + totals.totalCacheReadTokens;
+  if (totalAllInput > 0) totals.cacheHitRate = totals.totalCacheReadTokens / totalAllInput;
+  if (totals.totalQueries > 0) totals.avgTokensPerQuery = Math.round(totals.totalTokens / totals.totalQueries);
+  if (totals.totalSessions > 0) totals.avgTokensPerSession = Math.round(totals.totalTokens / totals.totalSessions);
+  return totals;
+}
+
+function buildViewData() {
+  if (!DATA) return null;
+  if (currentProvider === 'all') {
+    const allInsights = [
+      ...((DATA.insightsByProvider || {}).claude || []),
+      ...((DATA.insightsByProvider || {}).codex || []),
+    ];
+    return {
+      ...DATA,
+      insights: allInsights.length ? allInsights : (DATA.insights || []),
+    };
+  }
+
+  const sessions = (DATA.sessions || []).filter(s => (s.provider || 'claude') === currentProvider);
+  const dailyMap = {};
+  const modelMap = {};
+
+  sessions.forEach((s) => {
+    if (s.date && s.date !== 'unknown') {
+      if (!dailyMap[s.date]) {
+        dailyMap[s.date] = {
+          date: s.date,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+          sessions: 0,
+          queries: 0,
+        };
+      }
+      dailyMap[s.date].inputTokens += s.inputTokens || 0;
+      dailyMap[s.date].outputTokens += s.outputTokens || 0;
+      dailyMap[s.date].cacheCreationTokens += s.cacheCreationTokens || 0;
+      dailyMap[s.date].cacheReadTokens += s.cacheReadTokens || 0;
+      dailyMap[s.date].totalTokens += s.totalTokens || 0;
+      dailyMap[s.date].cost += s.cost || 0;
+      dailyMap[s.date].sessions += 1;
+      dailyMap[s.date].queries += s.queryCount || 0;
+    }
+
+    (s.queries || []).forEach((q) => {
+      const model = q.model || s.model || 'unknown';
+      if (!modelMap[model]) {
+        modelMap[model] = {
+          model,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+          queryCount: 0,
+        };
+      }
+      modelMap[model].inputTokens += q.inputTokens || 0;
+      modelMap[model].outputTokens += q.outputTokens || 0;
+      modelMap[model].cacheCreationTokens += q.cacheCreationTokens || 0;
+      modelMap[model].cacheReadTokens += q.cacheReadTokens || 0;
+      modelMap[model].totalTokens += q.totalTokens || 0;
+      modelMap[model].cost += q.cost || 0;
+      modelMap[model].queryCount += 1;
+    });
+  });
+
+  const dailyUsage = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+  const modelBreakdown = Object.values(modelMap).sort((a, b) => b.totalTokens - a.totalTokens);
+  const projectBreakdown = (DATA.projectBreakdown || []).filter((p) => (p.provider || 'claude') === currentProvider);
+  const topPrompts = (DATA.topPrompts || []).filter((p) => (p.provider || 'claude') === currentProvider);
+  const totals = computeTotalsFromSessions(sessions, dailyUsage);
+
+  const insightsByProvider = DATA.insightsByProvider || {};
+  let providerInsights = [];
+  if (currentProvider === 'all') {
+    providerInsights = [
+      ...(insightsByProvider.claude || []),
+      ...(insightsByProvider.codex || []),
+    ];
+  } else {
+    providerInsights = insightsByProvider[currentProvider] || [];
+  }
+  if (!providerInsights.length && currentProvider === 'claude') {
+    providerInsights = DATA.insights || [];
+  }
+
+  return {
+    sessions,
+    dailyUsage,
+    modelBreakdown,
+    projectBreakdown,
+    topPrompts,
+    totals,
+    providerBreakdown: DATA.providerBreakdown || [],
+    warnings: DATA.warnings || [],
+    insights: providerInsights,
+  };
+}
+
+function renderProviderControls() {
+  const tabs = document.getElementById('providerTabs');
+  const cards = document.getElementById('providerCards');
+  const providers = ['all', ...((DATA.providerBreakdown || []).map(p => p.provider))];
+
+  tabs.innerHTML = providers.map((p) => {
+    const active = currentProvider === p ? 'active' : '';
+    const label = p === 'all' ? 'All Providers' : providerLabel(p);
+    return `<button class="provider-tab ${active}" onclick="setProviderFilter('${p}')">${label}</button>`;
+  }).join('');
+
+  cards.innerHTML = (DATA.providerBreakdown || []).map((p) => {
+    const tokenMeta = p.totalTokens > 0
+      ? `${fmt(p.totalTokens)} tokens`
+      : 'No token totals in local logs';
+    return `<div class="provider-card">
+      <div class="provider-card-top">
+        <div class="provider-name">${providerLabel(p.provider)}</div>
+        <div class="provider-badge">${p.provider}</div>
+      </div>
+      <div class="provider-meta">${fmtFull(p.sessionCount)} sessions · ${fmtFull(p.queryCount)} messages</div>
+      <div class="provider-meta-muted">${tokenMeta}</div>
+    </div>`;
+  }).join('');
+}
+
+function setProviderFilter(provider) {
+  currentProvider = provider;
+  render();
+}
+
 function modelClass(m) {
   if (m.includes('opus')) return 'model-opus';
   if (m.includes('sonnet')) return 'model-sonnet';
@@ -911,6 +1144,8 @@ function modelClass(m) {
   return 'model-unknown';
 }
 function modelShort(m) {
+  if (!m) return 'Unknown';
+  if (m.includes('codex')) return 'Codex';
   // New format: claude-{family}-{major}-{minor}[-date]
   // e.g. claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001
   let match = m.match(/^claude-(opus|sonnet|haiku)-(\d+)-(\d+)/i);
@@ -936,6 +1171,7 @@ function modelShort(m) {
   return m;
 }
 function projectShort(p) {
+  if (!p) return 'unknown';
   // Strip Windows drive prefix (e.g. D-- or C--)
   let s = p.replace(/^[A-Za-z]--/, '');
   // Iteratively strip known parent directory segments
@@ -967,7 +1203,7 @@ async function fetchData() {
       return;
     }
     if (!json.totals || !json.sessions) {
-      showError('No session data found. Make sure you have used Claude Code at least once.');
+      showError('No session data found. Make sure at least one supported provider has local logs.');
       return;
     }
     DATA = json;
@@ -989,9 +1225,9 @@ function showError(msg) {
   const safe = msg.replace(/</g, '&lt;');
   let hint = '';
   if (safe.includes('ENOENT') || safe.includes('not found')) {
-    hint = '<p style="color:#94a3b8;font-size:13px;margin:0 0 20px">Make sure you have used Claude Code at least once. The data directory is created automatically.</p>';
+    hint = '<p style="color:#94a3b8;font-size:13px;margin:0 0 20px">Make sure at least one supported provider has local logs (~/.claude or ~/.codex).</p>';
   } else if (safe.includes('EPERM') || safe.includes('EACCES') || safe.includes('ermission')) {
-    hint = '<p style="color:#94a3b8;font-size:13px;margin:0 0 20px">Try running with elevated permissions, or check file permissions on your ~/.claude directory.</p>';
+    hint = '<p style="color:#94a3b8;font-size:13px;margin:0 0 20px">Try running with elevated permissions, or check read permissions for your local provider directories.</p>';
   }
   el.innerHTML = '<div style="font-size:48px;margin-bottom:16px">&#9888;&#65039;</div>' +
     '<h2 style="margin:0 0 12px;color:#1a1a2e">Something went wrong</h2>' +
@@ -1018,7 +1254,9 @@ async function refreshData() {
 function render() {
   document.getElementById('loading').style.display = 'none';
   document.getElementById('app').style.display = 'block';
+  VIEW = buildViewData();
   renderWarnings();
+  renderProviderControls();
   renderStats();
   renderInsights();
   renderDailyChart();
@@ -1030,7 +1268,7 @@ function render() {
 
 // Stats
 function renderStats() {
-  const t = DATA.totals;
+  const t = VIEW.totals;
   const range = t.dateRange ? `${formatDate(t.dateRange.from)} - ${formatDate(t.dateRange.to)}` : '';
   document.getElementById('dateRange').textContent = range;
 
@@ -1038,13 +1276,13 @@ function renderStats() {
 
   const cards = [
     { label: 'Total Usage', value: fmt(t.totalTokens), sub: `${fmt(t.totalInputTokens)} input · ${fmt(t.totalCacheCreationTokens || 0)} cache writes · ${fmt(t.totalCacheReadTokens || 0)} cache reads · ${fmt(t.totalOutputTokens)} output`,
-      tip: 'All tokens across your conversations. Input = fresh context, cache writes = first-time caching, cache reads = reused from cache (10x cheaper), output = Claude\'s responses.' },
+      tip: 'All tokens across selected sessions. Input = fresh context, cache writes = first-time caching, cache reads = reused cached context, output = assistant responses.' },
     { label: 'Conversations', value: fmtFull(t.totalSessions), sub: `Each one used ~${fmt(t.avgTokensPerSession)} tokens on average`,
-      tip: 'Each time you start Claude Code and begin chatting, that counts as one conversation. A new conversation starts fresh with no prior context.' },
+      tip: 'Each local chat log is counted as one session.' },
     { label: 'Messages Sent', value: fmtFull(t.totalQueries), sub: `Each message used ~${fmt(avgTokensPerMsg)} tokens on average`,
-      tip: 'Every time you hit Enter and send something to Claude, that is one message. This includes follow-up tool calls Claude makes automatically behind the scenes.' },
+      tip: 'Message/activity count inferred from local logs for the selected provider(s).' },
     { label: 'Cache Hit Rate', value: `${((t.cacheHitRate || 0) * 100).toFixed(0)}%`, sub: `${fmt(t.totalCacheReadTokens || 0)} tokens served from cache`,
-      tip: 'The percentage of input tokens that were served from cache instead of being processed fresh. Higher is better -- cached tokens are 10x cheaper and help you stay under rate limits.' },
+      tip: 'Based on available token logs. Some providers may not expose cache/token fields locally.' },
   ];
 
   document.getElementById('statsRow').innerHTML = cards.map((c, i) => `
@@ -1057,7 +1295,7 @@ function renderStats() {
 
 // Insights
 function renderInsights() {
-  const insights = DATA.insights || [];
+  const insights = VIEW.insights || [];
   const section = document.getElementById('insightsSection');
   if (!insights.length) { section.style.display = 'none'; return; }
 
@@ -1086,7 +1324,7 @@ function renderInsights() {
 function renderDailyChart() {
   const canvas = document.getElementById('dailyChart');
   const ctx = canvas.getContext('2d');
-  const data = DATA.dailyUsage;
+  const data = VIEW.dailyUsage;
   if (!data.length) return;
 
   const dpr = window.devicePixelRatio || 1;
@@ -1098,6 +1336,12 @@ function renderDailyChart() {
   ctx.clearRect(0, 0, w, h);
 
   const maxTotal = Math.max(...data.map(d => d.totalTokens));
+  if (maxTotal <= 0) {
+    ctx.fillStyle = '#94A3B8';
+    ctx.font = '500 12px Inter, system-ui';
+    ctx.fillText('No token totals available for this provider.', 12, 24);
+    return;
+  }
   const barW = Math.max(8, Math.min(32, (w - 52) / data.length - 3));
   const gap = 3;
   const chartH = h - 36;
@@ -1201,7 +1445,7 @@ function roundedRect(ctx, x, y, w, h, r) {
 function renderModelChart() {
   const canvas = document.getElementById('modelChart');
   const ctx = canvas.getContext('2d');
-  const data = DATA.modelBreakdown;
+  const data = VIEW.modelBreakdown;
   if (!data.length) return;
 
   const dpr = window.devicePixelRatio || 1;
@@ -1212,6 +1456,15 @@ function renderModelChart() {
 
   const cx = size/2, cy = size/2, r = size/2 - 6, innerR = r * 0.6;
   const total = data.reduce((s, d) => s + d.totalTokens, 0);
+  if (total <= 0) {
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = '#94A3B8';
+    ctx.font = '500 12px Inter, system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('No token totals', cx, cy);
+    document.getElementById('modelLegend').innerHTML = '';
+    return;
+  }
 
   const modelColors = { opus: ['#6366F1','#818CF8'], sonnet: ['#10B981','#34D399'], haiku: ['#F97316','#FB923C'] };
   function getColors(m) {
@@ -1280,7 +1533,7 @@ function buildDrawerContent(p) {
     const promptText = escapeHtml(pr.prompt);
     const sid = pr.sessionId;
     return [
-      '<div class="drawer-prompt-row" onclick="openDrilldown(\'' + sid + '\')">',
+      '<div class="drawer-prompt-row" onclick="openDrilldown(\'' + sid + '\',\'' + (pr.provider || p.provider || '') + '\')">',
       '<div class="drawer-rank">' + (i + 1) + '</div>',
       '<div>',
       '<div class="drawer-prompt-text">' + promptText + '</div>',
@@ -1295,7 +1548,7 @@ function buildDrawerContent(p) {
 
 // Project breakdown
 function renderProjectBreakdown() {
-  const projects = DATA.projectBreakdown;
+  const projects = VIEW.projectBreakdown;
   if (!projects || !projects.length) return;
 
   const countEl = document.getElementById('projectsCount');
@@ -1347,8 +1600,11 @@ function renderProjectBreakdown() {
 
 // Top prompts
 function renderTopPrompts() {
-  const prompts = DATA.topPrompts;
-  if (!prompts.length) return;
+  const prompts = VIEW.topPrompts;
+  if (!prompts.length) {
+    document.getElementById('topPromptsList').innerHTML = '<div style="padding:14px 16px;color:var(--text-tertiary);font-size:13px">No token-ranked prompts for this provider.</div>';
+    return;
+  }
   const maxTokens = prompts[0].totalTokens;
 
   document.getElementById('topPromptsList').innerHTML = prompts.map((p, i) => {
@@ -1358,11 +1614,11 @@ function renderTopPrompts() {
     const freshPct = total > 0 ? (freshIn / total) * 100 : 0;
     const cachePct = total > 0 ? (cached / total) * 100 : 0;
     const outPct = total > 0 ? (p.outputTokens / total) * 100 : 0;
-    return `<div class="prompt-row" onclick="openDrilldown('${p.sessionId}')">
+    return `<div class="prompt-row" onclick="openDrilldown('${p.sessionId}','${p.provider || ''}')">
       <div class="prompt-rank">${i + 1}</div>
       <div>
         <div class="prompt-text">${escapeHtml(p.prompt)}</div>
-        <div class="prompt-meta">${formatDate(p.date)} &middot; ${modelShort(p.model)}</div>
+        <div class="prompt-meta">${formatDate(p.date)} &middot; ${providerLabel(p.provider || 'claude')} &middot; ${modelShort(p.model)}</div>
         <div class="token-bar-wrap" style="width:${Math.max(10, (p.totalTokens / maxTokens) * 100)}%">
           <div class="token-bar-in" style="width:${freshPct}%"></div>
           <div class="token-bar-cache" style="width:${cachePct}%"></div>
@@ -1379,13 +1635,14 @@ function renderTopPrompts() {
 
 // Sessions
 function renderSessions() {
-  let sessions = [...DATA.sessions];
+  let sessions = [...VIEW.sessions];
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
     sessions = sessions.filter(s =>
       s.firstPrompt.toLowerCase().includes(q) ||
       s.model.toLowerCase().includes(q) ||
-      projectShort(s.project).toLowerCase().includes(q)
+      projectShort(s.project).toLowerCase().includes(q) ||
+      providerLabel(s.provider || 'claude').toLowerCase().includes(q)
     );
   }
 
@@ -1393,6 +1650,7 @@ function renderSessions() {
     date: (a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''),
     prompt: (a, b) => a.firstPrompt.localeCompare(b.firstPrompt),
     model: (a, b) => a.model.localeCompare(b.model),
+    provider: (a, b) => (a.provider || '').localeCompare(b.provider || ''),
     queries: (a, b) => a.queryCount - b.queryCount,
     total: (a, b) => a.totalTokens - b.totalTokens,
     input: (a, b) => a.inputTokens - b.inputTokens,
@@ -1404,13 +1662,14 @@ function renderSessions() {
   document.getElementById('sessionCount').textContent = `${sessions.length} sessions`;
 
   document.getElementById('sessionsBody').innerHTML = sessions.map(s => `
-    <tr onclick="openDrilldown('${s.sessionId}')">
+    <tr onclick="openDrilldown('${s.sessionId}','${s.provider || ''}')">
       <td class="date-cell">
         ${formatDate(s.date)}
         <span class="project-tag" title="${escapeHtml(projectShort(s.project))}">${escapeHtml(projectShort(s.project))}</span>
       </td>
       <td><div class="prompt-preview" title="${escapeHtml(s.firstPrompt)}">${escapeHtml(s.firstPrompt)}</div></td>
       <td><span class="model-badge ${modelClass(s.model)}"><span class="model-dot"></span>${modelShort(s.model)}</span></td>
+      <td><span class="project-tag" style="max-width:none;margin-top:0">${providerLabel(s.provider || 'claude')}</span></td>
       <td class="token-num">${s.queryCount}</td>
       <td class="token-num" style="font-weight:700">${fmt(s.totalTokens)}</td>
       <td class="token-num">${fmt(s.inputTokens)}</td>
@@ -1664,13 +1923,14 @@ function renderDrilldownInsight(grouped, session) {
 }
 
 // Drill-down
-function openDrilldown(sessionId) {
-  const session = DATA.sessions.find(s => s.sessionId === sessionId);
+function openDrilldown(sessionId, provider) {
+  const session = VIEW.sessions.find(s => s.sessionId === sessionId && (!provider || (s.provider || 'claude') === provider))
+    || VIEW.sessions.find(s => s.sessionId === sessionId);
   if (!session) return;
 
   document.getElementById('drilldownTitle').textContent = session.firstPrompt.substring(0, 140);
   document.getElementById('drilldownMeta').textContent =
-    `${formatDate(session.date)} \u00B7 ${modelShort(session.model)} \u00B7 ${session.queryCount} messages \u00B7 ${fmt(session.totalTokens)} tokens`;
+    `${formatDate(session.date)} \u00B7 ${providerLabel(session.provider || 'claude')} \u00B7 ${modelShort(session.model)} \u00B7 ${session.queryCount} messages \u00B7 ${fmt(session.totalTokens)} tokens`;
 
   const grouped = groupSessionQueries(session.queries);
 
@@ -1727,8 +1987,8 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
 }
 
 async function generateShareCard() {
-  if (!DATA) return;
-  const t = DATA.totals;
+  if (!VIEW) return;
+  const t = VIEW.totals;
 
   await document.fonts.ready;
 
@@ -1760,7 +2020,10 @@ async function generateShareCard() {
   // Title
   ctx.fillStyle = '#F8FAFC';
   ctx.font = '800 42px Inter, system-ui';
-  ctx.fillText('My Claude Code Stats', 60, 80);
+  const shareTitle = currentProvider === 'all'
+    ? 'My AI Usage Stats'
+    : `My ${providerLabel(currentProvider)} Usage Stats`;
+  ctx.fillText(shareTitle, 60, 80);
 
   // Date range
   if (t.dateRange) {
@@ -1770,7 +2033,7 @@ async function generateShareCard() {
   }
 
   // Top insight in amber
-  const insights = DATA.insights || [];
+  const insights = VIEW.insights || [];
   if (insights.length > 0) {
     ctx.fillStyle = '#F59E0B';
     ctx.font = '600 20px Inter, system-ui';
@@ -1828,7 +2091,7 @@ async function generateShareCard() {
   ctx.fillStyle = '#475569';
   ctx.font = '500 14px Inter, system-ui';
   ctx.textAlign = 'right';
-  ctx.fillText('npx claude-spend', W - 60, footerY);
+  ctx.fillText('npx agent-spend', W - 60, footerY);
   ctx.textAlign = 'left';
 
   // Show overlay
@@ -1838,7 +2101,7 @@ async function generateShareCard() {
 function downloadShareCard() {
   const canvas = document.getElementById('shareCanvas');
   const link = document.createElement('a');
-  link.download = 'claude-spend-stats.png';
+  link.download = 'agent-spend-stats.png';
   link.href = canvas.toDataURL('image/png');
   link.click();
 }

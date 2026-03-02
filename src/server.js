@@ -8,8 +8,8 @@ function createServer() {
 
   function friendlyError(err) {
     const msg = err.message || String(err);
-    if (err.code === 'ENOENT') return { error: 'Claude Code data directory not found. Have you used Claude Code yet?', code: 'ENOENT' };
-    if (err.code === 'EPERM' || err.code === 'EACCES') return { error: 'Permission denied reading Claude Code data. Try running with elevated permissions.', code: err.code };
+    if (err.code === 'ENOENT') return { error: 'No supported local data directories were found. Check ~/.claude or ~/.codex.', code: 'ENOENT' };
+    if (err.code === 'EPERM' || err.code === 'EACCES') return { error: 'Permission denied reading local provider data. Try running with elevated permissions.', code: err.code };
     return { error: msg };
   }
 

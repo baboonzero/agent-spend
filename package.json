@@ -1,10 +1,10 @@
 {
-  "name": "claude-spend",
+  "name": "agent-spend",
   "version": "1.0.6",
-  "description": "See where your Claude Code tokens go. One command, zero setup.",
+  "description": "See where your local AI assistant usage goes. One command, zero setup.",
   "main": "src/index.js",
   "bin": {
-    "claude-spend": "src/index.js"
+    "agent-spend": "src/index.js"
   },
   "scripts": {
     "start": "node src/index.js"
@@ -23,7 +23,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/writetoaniketparihar-collab/claude-spend.git"
+    "url": "https://github.com/writetoaniketparihar-collab/agent-spend.git"
   },
   "dependencies": {
     "express": "^4.21.0",
