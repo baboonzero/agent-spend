@@ -143,6 +143,12 @@
     flex-wrap: wrap;
     margin-bottom: 12px;
   }
+  .time-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
   .provider-tab {
     border: 1px solid var(--border);
     background: #FAFBFF;
@@ -159,6 +165,23 @@
     background: rgba(99,102,241,0.1);
     border-color: rgba(99,102,241,0.25);
     color: #4338CA;
+  }
+  .time-tab {
+    border: 1px solid var(--border);
+    background: #F7FFFD;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .time-tab:hover { border-color: var(--teal); color: var(--teal); }
+  .time-tab.active {
+    background: rgba(20,184,166,0.12);
+    border-color: rgba(20,184,166,0.25);
+    color: #0F766E;
   }
   .provider-cards {
     display: grid;
@@ -786,6 +809,7 @@
 
   <div class="provider-toolbar animate delay-1">
     <div id="providerTabs" class="provider-tabs"></div>
+    <div id="timeRangeTabs" class="time-tabs"></div>
     <div id="providerCards" class="provider-cards"></div>
   </div>
 
@@ -964,7 +988,15 @@ let DATA = null;
 let currentSort = { key: 'total', dir: 'desc' };
 let searchQuery = '';
 let currentProvider = 'all';
+let currentTimeRange = 'all';
 let VIEW = null;
+
+const TIME_RANGES = [
+  { key: '24h', label: '24H', days: 1 },
+  { key: '7d', label: '7D', days: 7 },
+  { key: '30d', label: '30D', days: 30 },
+  { key: 'all', label: 'All Time', days: null },
+];
 
 function fmt(n) {
   if (n == null || isNaN(n)) return '0';
@@ -982,6 +1014,29 @@ function providerLabel(p) {
   if (p === 'claude') return 'Claude';
   if (p === 'codex') return 'Codex';
   return p ? (p.charAt(0).toUpperCase() + p.slice(1)) : 'Unknown';
+}
+function timeRangeLabel(key) {
+  const found = TIME_RANGES.find((r) => r.key === key);
+  return found ? found.label : 'All Time';
+}
+function getSessionTimeMs(session) {
+  if (session?.timestamp) {
+    const ts = Date.parse(session.timestamp);
+    if (!Number.isNaN(ts)) return ts;
+  }
+  if (session?.date && session.date !== 'unknown') {
+    const ts = Date.parse(`${session.date}T23:59:59`);
+    if (!Number.isNaN(ts)) return ts;
+  }
+  return null;
+}
+function isSessionInTimeRange(session, rangeKey) {
+  if (rangeKey === 'all') return true;
+  const range = TIME_RANGES.find((r) => r.key === rangeKey);
+  if (!range?.days) return true;
+  const ts = getSessionTimeMs(session);
+  if (ts == null) return false;
+  return ts >= (Date.now() - (range.days * 24 * 60 * 60 * 1000));
 }
 
 function computeTotalsFromSessions(sessions, dailyUsage) {
@@ -1007,22 +1062,10 @@ function computeTotalsFromSessions(sessions, dailyUsage) {
   return totals;
 }
 
-function buildViewData() {
-  if (!DATA) return null;
-  if (currentProvider === 'all') {
-    const allInsights = [
-      ...((DATA.insightsByProvider || {}).claude || []),
-      ...((DATA.insightsByProvider || {}).codex || []),
-    ];
-    return {
-      ...DATA,
-      insights: allInsights.length ? allInsights : (DATA.insights || []),
-    };
-  }
-
-  const sessions = (DATA.sessions || []).filter(s => (s.provider || 'claude') === currentProvider);
+function summarizeSessions(sessions) {
   const dailyMap = {};
   const modelMap = {};
+  const topPrompts = [];
 
   sessions.forEach((s) => {
     if (s.date && s.date !== 'unknown') {
@@ -1071,53 +1114,141 @@ function buildViewData() {
       modelMap[model].cost += q.cost || 0;
       modelMap[model].queryCount += 1;
     });
+
+    let currentPrompt = null;
+    let current = null;
+    const flush = () => {
+      if (!currentPrompt || !current || current.totalTokens <= 0) return;
+      topPrompts.push({
+        prompt: currentPrompt.substring(0, 300),
+        inputTokens: current.inputTokens,
+        outputTokens: current.outputTokens,
+        cacheCreationTokens: current.cacheCreationTokens,
+        cacheReadTokens: current.cacheReadTokens,
+        totalTokens: current.totalTokens,
+        cost: current.cost,
+        date: s.date,
+        sessionId: s.sessionId,
+        model: s.model,
+        provider: s.provider,
+      });
+    };
+
+    (s.queries || []).forEach((q) => {
+      if (q.userPrompt && q.userPrompt !== currentPrompt) {
+        flush();
+        currentPrompt = q.userPrompt;
+        current = {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+        };
+      }
+      if (!current) return;
+      current.inputTokens += q.inputTokens || 0;
+      current.outputTokens += q.outputTokens || 0;
+      current.cacheCreationTokens += q.cacheCreationTokens || 0;
+      current.cacheReadTokens += q.cacheReadTokens || 0;
+      current.totalTokens += q.totalTokens || 0;
+      current.cost += q.cost || 0;
+    });
+    flush();
   });
 
   const dailyUsage = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
   const modelBreakdown = Object.values(modelMap).sort((a, b) => b.totalTokens - a.totalTokens);
-  const projectBreakdown = (DATA.projectBreakdown || []).filter((p) => (p.provider || 'claude') === currentProvider);
-  const topPrompts = (DATA.topPrompts || []).filter((p) => (p.provider || 'claude') === currentProvider);
-  const totals = computeTotalsFromSessions(sessions, dailyUsage);
-
-  const insightsByProvider = DATA.insightsByProvider || {};
-  let providerInsights = [];
-  if (currentProvider === 'all') {
-    providerInsights = [
-      ...(insightsByProvider.claude || []),
-      ...(insightsByProvider.codex || []),
-    ];
-  } else {
-    providerInsights = insightsByProvider[currentProvider] || [];
-  }
-  if (!providerInsights.length && currentProvider === 'claude') {
-    providerInsights = DATA.insights || [];
-  }
+  topPrompts.sort((a, b) => b.totalTokens - a.totalTokens);
 
   return {
     sessions,
     dailyUsage,
     modelBreakdown,
-    projectBreakdown,
     topPrompts,
-    totals,
+    totals: computeTotalsFromSessions(sessions, dailyUsage),
+  };
+}
+
+function buildViewData() {
+  if (!DATA) return null;
+  const inRange = (DATA.sessions || []).filter((s) => isSessionInTimeRange(s, currentTimeRange));
+  if (currentProvider === 'all') {
+    const allInsights = [
+      ...((DATA.insightsByProvider || {}).claude || []),
+      ...((DATA.insightsByProvider || {}).codex || []),
+    ];
+    const summary = summarizeSessions(inRange);
+    return {
+      ...summary,
+      providerBreakdown: DATA.providerBreakdown || [],
+      warnings: DATA.warnings || [],
+      insights: allInsights.length ? allInsights : (DATA.insights || []),
+    };
+  }
+
+  const sessions = inRange.filter((s) => (s.provider || 'claude') === currentProvider);
+  const summary = summarizeSessions(sessions);
+
+  const insightsByProvider = DATA.insightsByProvider || {};
+  let providerInsights = insightsByProvider[currentProvider] || [];
+  if (!providerInsights.length && currentProvider === 'claude') {
+    providerInsights = DATA.insights || [];
+  }
+
+  return {
+    ...summary,
+    projectBreakdown: (DATA.projectBreakdown || []).filter((p) => (p.provider || 'claude') === currentProvider),
     providerBreakdown: DATA.providerBreakdown || [],
     warnings: DATA.warnings || [],
     insights: providerInsights,
   };
 }
 
+function summarizeProvidersForTimeRange() {
+  const rows = {};
+  (DATA.sessions || []).forEach((session) => {
+    if (!isSessionInTimeRange(session, currentTimeRange)) return;
+    const provider = session.provider || 'claude';
+    if (!rows[provider]) {
+      rows[provider] = {
+        provider,
+        sessionCount: 0,
+        queryCount: 0,
+        totalTokens: 0,
+      };
+    }
+    rows[provider].sessionCount += 1;
+    rows[provider].queryCount += session.queryCount || 0;
+    rows[provider].totalTokens += session.totalTokens || 0;
+  });
+  return Object.values(rows).sort((a, b) => b.totalTokens - a.totalTokens || b.queryCount - a.queryCount);
+}
+
 function renderProviderControls() {
   const tabs = document.getElementById('providerTabs');
+  const timeTabs = document.getElementById('timeRangeTabs');
   const cards = document.getElementById('providerCards');
-  const providers = ['all', ...((DATA.providerBreakdown || []).map(p => p.provider))];
+  const providerRows = summarizeProvidersForTimeRange();
+  const providers = ['all', ...(providerRows.map((p) => p.provider))];
+  const allSessionsInRange = (DATA.sessions || []).filter((s) => isSessionInTimeRange(s, currentTimeRange));
 
   tabs.innerHTML = providers.map((p) => {
     const active = currentProvider === p ? 'active' : '';
     const label = p === 'all' ? 'All Providers' : providerLabel(p);
-    return `<button class="provider-tab ${active}" onclick="setProviderFilter('${p}')">${label}</button>`;
+    const count = p === 'all'
+      ? fmtFull(allSessionsInRange.length)
+      : fmtFull((providerRows.find((row) => row.provider === p) || {}).sessionCount || 0);
+    return `<button class="provider-tab ${active}" onclick="setProviderFilter('${p}')">${label} (${count})</button>`;
   }).join('');
 
-  cards.innerHTML = (DATA.providerBreakdown || []).map((p) => {
+  timeTabs.innerHTML = TIME_RANGES.map((range) => {
+    const active = currentTimeRange === range.key ? 'active' : '';
+    return `<button class="time-tab ${active}" onclick="setTimeRangeFilter('${range.key}')">${range.label}</button>`;
+  }).join('');
+
+  cards.innerHTML = providerRows.map((p) => {
     const tokenMeta = p.totalTokens > 0
       ? `${fmt(p.totalTokens)} tokens`
       : 'No token totals in local logs';
@@ -1134,6 +1265,10 @@ function renderProviderControls() {
 
 function setProviderFilter(provider) {
   currentProvider = provider;
+  render();
+}
+function setTimeRangeFilter(range) {
+  currentTimeRange = range;
   render();
 }
 
@@ -1269,7 +1404,8 @@ function render() {
 // Stats
 function renderStats() {
   const t = VIEW.totals;
-  const range = t.dateRange ? `${formatDate(t.dateRange.from)} - ${formatDate(t.dateRange.to)}` : '';
+  const rangeLabel = timeRangeLabel(currentTimeRange);
+  const range = t.dateRange ? `${rangeLabel} · ${formatDate(t.dateRange.from)} - ${formatDate(t.dateRange.to)}` : `${rangeLabel} · No activity`;
   document.getElementById('dateRange').textContent = range;
 
   const avgTokensPerMsg = t.totalQueries > 0 ? Math.round(t.totalTokens / t.totalQueries) : 0;

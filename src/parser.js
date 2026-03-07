@@ -103,6 +103,7 @@ async function parseJSONLFile(filePath) {
 function extractSessionData(entries) {
   const queries = [];
   let pendingUserMessage = null;
+  const seenAssistantRequests = new Set();
 
   for (const entry of entries) {
     if (entry.type === 'user' && entry.message?.role === 'user') {
@@ -126,6 +127,13 @@ function extractSessionData(entries) {
       const usage = entry.message.usage;
       const model = entry.message.model || 'unknown';
       if (model === '<synthetic>') continue;
+
+      // Claude logs can repeat the same response record while streaming.
+      const requestKey = entry.requestId || entry.message.id;
+      if (requestKey) {
+        if (seenAssistantRequests.has(requestKey)) continue;
+        seenAssistantRequests.add(requestKey);
+      }
 
       const pricing = getPricing(model);
       const inputTokens = usage.input_tokens || 0;
@@ -951,8 +959,8 @@ function extractCodexTokenUsage(entry) {
   const last = payload.info?.last_token_usage;
   if (!last || typeof last !== 'object') return null;
 
-  const inputTokens = toNum(last.input_tokens);
   const cacheReadTokens = toNum(last.cached_input_tokens);
+  const inputTokens = Math.max(0, toNum(last.input_tokens) - cacheReadTokens);
   const outputTokens = toNum(last.output_tokens) + toNum(last.reasoning_output_tokens);
   const totalTokens = toNum(last.total_tokens) || (inputTokens + cacheReadTokens + outputTokens);
 
